@@ -76,25 +76,6 @@ function createWindow() {
 
   Menu.setApplicationMenu(null);
 
-  // When window goes wider than phone width, center the UI with dark side panels
-  win.webContents.on('did-finish-load', () => {
-    win.webContents.insertCSS(`
-      body {
-        display: flex !important;
-        justify-content: center !important;
-        background: #0a0a0a !important;
-        margin: 0 !important;
-      }
-      #root {
-        max-width: 520px !important;
-        width: 100% !important;
-        flex: none !important;
-        position: relative !important;
-        overflow: hidden !important;
-      }
-    `).catch(() => {});
-  });
-
   if (isDev) {
     win.webContents.openDevTools({ mode: 'detach' });
     win.loadURL(DEV_URL);
