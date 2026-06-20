@@ -1,0 +1,39 @@
+{
+  "name": "forge-desktop",
+  "version": "1.0.0",
+  "description": "FORGE — The Discipline OS",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "pack:win": "electron-builder --win",
+    "pack:mac": "electron-builder --mac",
+    "pack:linux": "electron-builder --linux"
+  },
+  "devDependencies": {
+    "electron": "^31.3.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.forge.disciplineos",
+    "productName": "FORGE",
+    "copyright": "Copyright © 2026 FORGE",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "web/**/*"
+    ],
+    "win": {
+      "target": [{ "target": "nsis", "arch": ["x64"] }]
+    },
+    "mac": {
+      "target": [{ "target": "dmg", "arch": ["x64", "arm64"] }],
+      "category": "public.app-category.health-fitness"
+    },
+    "linux": {
+      "target": [{ "target": "AppImage" }]
+    }
+  }
+}
