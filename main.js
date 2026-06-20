@@ -1,15 +1,12 @@
-const { app, BrowserWindow, Menu, nativeTheme, dialog } = require('electron');
+const { app, BrowserWindow, Menu, nativeTheme, protocol, dialog } = require('electron');
 const path = require('path');
-const http = require('http');
 const fs = require('fs');
-const urlModule = require('url');
 
 nativeTheme.themeSource = 'dark';
 
 const isDev = !app.isPackaged;
 const DEV_URL = 'http://localhost:8081';
 const WEB_DIR = path.join(__dirname, 'web');
-const BASE_PORT = 45678;
 
 const MIME = {
   '.html':  'text/html; charset=utf-8',
@@ -26,63 +23,77 @@ const MIME = {
   '.ttf':   'font/ttf',
 };
 
-function requestHandler(req, res) {
-  const parsed = urlModule.parse(req.url);
-  let filePath = path.join(WEB_DIR, parsed.pathname);
+// Must happen before app.ready() — registers forge:// as a secure, standard scheme
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'forge', privileges: { secure: true, standard: true, supportFetchAPI: true, corsEnabled: true } }
+]);
 
-  try {
-    const stat = fs.statSync(filePath);
-    if (stat.isDirectory()) filePath = path.join(WEB_DIR, 'index.html');
-  } catch (e) {
-    filePath = path.join(WEB_DIR, 'index.html');
-  }
+app.whenReady().then(() => {
+  // Serve the bundled web build via forge:// — no TCP server, no port conflicts
+  protocol.handle('forge', (request) => {
+    const url = new URL(request.url);
+    let filePath = path.join(WEB_DIR, url.pathname);
 
-  const ext = path.extname(filePath).toLowerCase();
-  const contentType = MIME[ext] || 'application/octet-stream';
+    try {
+      const stat = fs.statSync(filePath);
+      if (stat.isDirectory()) filePath = path.join(WEB_DIR, 'index.html');
+    } catch {
+      // path doesn't exist → SPA fallback
+      filePath = path.join(WEB_DIR, 'index.html');
+    }
 
-  fs.readFile(filePath, (err, data) => {
-    if (err) { res.writeHead(404); res.end('Not found'); return; }
-    res.writeHead(200, { 'Content-Type': contentType });
-    res.end(data);
+    if (!fs.existsSync(filePath)) filePath = path.join(WEB_DIR, 'index.html');
+
+    const data = fs.readFileSync(filePath);
+    const ext = path.extname(filePath).toLowerCase();
+    return new Response(data, { headers: { 'content-type': MIME[ext] || 'application/octet-stream' } });
   });
-}
 
-function startServer() {
-  return new Promise((resolve, reject) => {
-    const tryPort = (port) => {
-      if (port > BASE_PORT + 20) { reject(new Error('No available port')); return; }
-      const server = http.createServer(requestHandler);
-      server.on('error', (err) => {
-        if (err.code === 'EADDRINUSE') tryPort(port + 1);
-        else reject(err);
-      });
-      server.listen(port, '127.0.0.1', () => resolve({ server, port }));
-    };
-    tryPort(BASE_PORT);
+  createWindow();
+
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
-}
+});
 
-const WIN_OPTIONS = {
-  width: 430,
-  height: 900,
-  minWidth: 360,
-  minHeight: 720,
-  maxWidth: 520,
-  webPreferences: {
-    nodeIntegration: false,
-    contextIsolation: true,
-  },
-  backgroundColor: '#0a0a0a',
-  title: 'FORGE — Discipline OS',
-  resizable: true,
-  maximizable: false,   // prevents fullscreen stretching across desktop
-  center: true,
-  autoHideMenuBar: true,
-};
+function createWindow() {
+  const win = new BrowserWindow({
+    width: 430,
+    height: 900,
+    minWidth: 360,
+    minHeight: 600,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+    },
+    backgroundColor: '#0a0a0a',
+    title: 'FORGE — Discipline OS',
+    resizable: true,    // can resize freely
+    maximizable: true,  // fullscreen works
+    center: true,
+    autoHideMenuBar: true,
+  });
 
-async function createWindow() {
-  const win = new BrowserWindow(WIN_OPTIONS);
   Menu.setApplicationMenu(null);
+
+  // When window goes wider than phone width, center the UI with dark side panels
+  win.webContents.on('did-finish-load', () => {
+    win.webContents.insertCSS(`
+      body {
+        display: flex !important;
+        justify-content: center !important;
+        background: #0a0a0a !important;
+        margin: 0 !important;
+      }
+      #root {
+        max-width: 520px !important;
+        width: 100% !important;
+        flex: none !important;
+        position: relative !important;
+        overflow: hidden !important;
+      }
+    `).catch(() => {});
+  });
 
   if (isDev) {
     win.webContents.openDevTools({ mode: 'detach' });
@@ -91,32 +102,15 @@ async function createWindow() {
       win.webContents.executeJavaScript(`
         document.body.style.cssText='margin:0;background:#0a0a0a;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;';
         document.body.innerHTML='<div style="text-align:center;padding:40px"><div style="font-size:48px;margin-bottom:16px">🔥</div><h2 style="color:#FF6B2C;margin:0 0 12px">FORGE Dev Mode</h2><p style="color:#888;margin:0 0 20px">Expo dev server not running.</p><p style="background:#1a1a1a;padding:12px 20px;border-radius:8px;font-family:monospace;color:#FF6B2C">cd forge<br>npx expo start --web</p></div>';
-      `);
+      `).catch(() => {});
     });
     return;
   }
 
-  // Production: spin up local HTTP server then load
-  let port;
-  try {
-    ({ port } = await startServer());
-  } catch (err) {
-    dialog.showErrorBox('FORGE — Startup Error', `Could not start local server: ${err.message}`);
-    app.quit();
-    return;
-  }
+  // Production: load app via forge:// custom protocol (no port, no TCP server)
+  win.loadURL('forge://localhost/');
 
-  win.loadURL(`http://127.0.0.1:${port}`);
-
-  // If the page still fails to load, show a diagnostic overlay
-  win.webContents.on('did-fail-load', (event, code, desc) => {
-    win.webContents.executeJavaScript(`
-      document.body.style.cssText='margin:0;background:#0a0a0a;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;';
-      document.body.innerHTML='<div style="text-align:center;padding:40px"><div style="font-size:48px">🔥</div><h2 style="color:#FF6B2C">Failed to load FORGE</h2><p style="color:#888">Error ${code}: ${desc}</p><p style="color:#555;font-size:12px">Try restarting the app</p></div>';
-    `).catch(() => {});
-  });
-
-  // Auto-update: check GitHub releases silently on every launch
+  // Auto-update: detect new GitHub releases and prompt user to restart
   try {
     const { autoUpdater } = require('electron-updater');
     autoUpdater.autoDownload = true;
@@ -137,13 +131,6 @@ async function createWindow() {
     autoUpdater.checkForUpdates();
   } catch (e) {}
 }
-
-app.whenReady().then(() => {
-  createWindow();
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
-  });
-});
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
